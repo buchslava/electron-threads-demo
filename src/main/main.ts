@@ -12,6 +12,8 @@ import path from 'path';
 import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
+import { Worker } from 'node:worker_threads';
+
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 
@@ -25,11 +27,53 @@ class AppUpdater {
 
 let mainWindow: BrowserWindow | null = null;
 
+///
+
+let worker: Worker | undefined;
+
 ipcMain.on('ipc-example', async (event, arg) => {
-  const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
-  console.log(msgTemplate(arg));
-  event.reply('ipc-example', msgTemplate('pong'));
+  if (arg[0] === 'start-process') {
+    if (worker) {
+      event.reply('ipc-example', {
+        action: 'finish-process',
+        data: 'worker already exists',
+      });
+      return;
+    }
+    worker = new Worker(require.resolve('./worker'), {
+      workerData: {
+        iterations: 1000,
+      },
+    });
+    worker.on('message', (res) => {
+      event.reply('ipc-example', { action: 'count', data: res });
+    });
+    worker.on('error', (err) => {
+      event.reply('ipc-example', {
+        action: 'finish-process',
+        data: err,
+      });
+    });
+    worker.on('exit', (code) => {
+      if (code) {
+        event.reply('ipc-example', {
+          action: 'finish-process',
+          data: code,
+        });
+      }
+      worker = undefined;
+    });
+  }
+  if (arg[0] === 'stop-process' && worker) {
+    worker.postMessage('stop');
+    event.reply('ipc-example', {
+      action: 'finish-process',
+      data: null,
+    });
+  }
 });
+
+///
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
